@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Repository checks (validate.sh)
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || sudo apt-get install -y --no-install-recommends python3-yaml
+          bash validate.sh
+
+      - name: shellcheck
+        run: shellcheck -x mcp-*/run.sh validate.sh .github/scripts/*.sh
+
+      - name: actionlint
+        env:
+          # renovate: datasource=github-releases depName=rhysd/actionlint
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          go install "github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}"
+          "$(go env GOPATH)/bin/actionlint" -color
+
+      - name: hadolint
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: Dockerfile
+          recursive: true
+          config: .hadolint.yaml
+
+  build:
+    name: Build & smoke test (${{ matrix.addon }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        addon: [mcp-azure, mcp-filesystem, mcp-git, mcp-influxdb, mcp-node-red]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Home Assistant builds these images on the device (aarch64). CI builds
+      # them for the runner's architecture: the Dockerfiles are arch-neutral,
+      # so this catches broken bases, dependency bumps and startup crashes.
+      - name: Build image
+        env:
+          ADDON: ${{ matrix.addon }}
+        run: .github/scripts/build-image.sh "${ADDON}" "ci/${ADDON}:test"
+
+      - name: Smoke test
+        env:
+          ADDON: ${{ matrix.addon }}
+        run: .github/scripts/smoke-test.sh "${ADDON}" "ci/${ADDON}:test"

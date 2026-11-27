@@ -1,0 +1,12 @@
+# hadolint configuration for the addon Dockerfiles (used by .github/workflows/ci.yml).
+failure-threshold: warning
+ignored:
+  # Pinning OS package versions (apk/apt) breaks builds as soon as the distro
+  # drops the old version. The base image tag is tracked by Renovate instead,
+  # and the Azure CLI apt version is pinned explicitly in mcp-azure/Dockerfile.
+  - DL3008
+  - DL3018
+  # npm/pip versions are declared in package.json / requirements.txt, which
+  # Renovate tracks; the Dockerfiles only install from those manifests.
+  - DL3016
+  - DL3013

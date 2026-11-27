@@ -1,0 +1,39 @@
+name: zizmor
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/**"]
+  pull_request:
+    paths: [".github/**"]
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The action pins zizmor itself: each version it supports, including
+      # "latest", is installed from a hash-locked requirements file in the
+      # action's own tree, so the commit SHA above fixes the zizmor version.
+      #
+      # Code scanning (SARIF upload) is only available once the repository is
+      # public. While it is private, findings are reported as annotations and
+      # fail the job instead.
+      - uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
+        with:
+          persona: regular
+          advanced-security: ${{ github.event.repository.private != true }}
+          annotations: ${{ github.event.repository.private == true }}

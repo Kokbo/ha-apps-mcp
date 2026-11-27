@@ -1,0 +1,51 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "schedule:weekly"
+  ],
+  "timezone": "Europe/Amsterdam",
+  "platformAutomerge": false,
+  "packageRules": [
+    {
+      "description": "One PR for all GitHub Actions updates, once a release has aged a few days",
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions",
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "Automerge low-risk Actions updates after CI passes (majors stay manual)",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin", "pinDigest"],
+      "automerge": true
+    },
+    {
+      "description": "Pin Python requirements so every update arrives as a reviewable, CI-tested PR",
+      "matchManagers": ["pip_requirements"],
+      "rangeStrategy": "pin"
+    },
+    {
+      "description": "mcp-influxdb uses FastMCP, which mcp 2.x renamed: stay on 1.x until the server is ported",
+      "matchManagers": ["pip_requirements"],
+      "matchPackageNames": ["mcp"],
+      "allowedVersions": "<2"
+    },
+    {
+      "description": "Azure CLI: wait until the apt package for a new release is published",
+      "matchDepNames": ["Azure/azure-cli"],
+      "minimumReleaseAge": "3 days"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Versions annotated with a '# renovate:' comment in Dockerfile ARGs and workflow env",
+      "managerFilePatterns": ["/(^|/)Dockerfile$/", "/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?\\s+(?:ARG \\w+=|\\w+: )\"?(?<currentValue>[^\\s\"]+)\"?"
+      ],
+      "extractVersionTemplate": "{{#if extractVersion}}{{{extractVersion}}}{{else}}^v?(?<version>.+)${{/if}}"
+    }
+  ]
+}

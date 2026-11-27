@@ -1,0 +1,27 @@
+name: MCP InfluxDB Server
+version: "1.1.1"
+slug: mcp-influxdb
+description: MCP server for InfluxDB 1.8.x queries via Streamable HTTP
+url: https://github.com/Kokbo/ha-apps-mcp
+arch:
+  - aarch64
+host_network: true
+ports:
+  3004/tcp: 3004
+ports_description:
+  3004/tcp: MCP Streamable HTTP server
+options:
+  port: 3004
+  api_key: ""
+  influxdb_url: "http://localhost:8086"
+  influxdb_database: homeassistant
+  influxdb_user: ""
+  influxdb_password: ""
+schema:
+  port: int
+  api_key: password
+  influxdb_url: str
+  influxdb_database: str
+  influxdb_user: str
+  influxdb_password: str
+init: false

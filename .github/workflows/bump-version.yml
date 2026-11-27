@@ -1,0 +1,34 @@
+name: Bump addon versions after Renovate
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+# Serialize runs so two merges in a row can't race on the version files.
+concurrency:
+  group: bump-version
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Bump versions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # push the bump commit to main
+      pull-requests: read # find the PR a commit belongs to
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          # zizmor: ignore[artipacked] this job pushes the bump commit with git
+          persist-credentials: true
+
+      - name: Bump touched addons
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: .github/scripts/bump-after-renovate.sh

@@ -1,0 +1,12 @@
+{
+  "name": "mcp-azure-addon",
+  "version": "1.0.1",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@azure-devops/mcp": "2.11.0",
+    "@azure/mcp": "3.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^5.0.0"
+  }
+}
