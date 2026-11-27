@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0
+
+- New option `devops_pat`: the Azure DevOps MCP Server can use a personal access token instead of `az login` (`--authentication pat`). Useful when Conditional Access blocks the device-code login but your organisation allows PATs.
+- New option `azure_enabled` (default `true`): turn it off to run only the Azure DevOps server. With `azure_enabled: false` and a `devops_pat`, the addon skips `az login` entirely.
+
 ## 1.0.1
 
 - Fix the build: `@azure-devops/mcp` 2.11.1 was never published (only nightlies), so `npm install` failed. Pin the latest stable release, 2.11.0.

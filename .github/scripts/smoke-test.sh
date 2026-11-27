@@ -173,6 +173,33 @@ if [ "${addon}" = mcp-azure ]; then
     annotate_warning "smoke test: ${addon}" "no device-code prompt within 90s (needs login.microsoftonline.com)"$'\n'"${logs}"
     echo "WARN: no device-code prompt within 90s" >&2
   fi
+
+  echo "--- DevOps-only with a PAT: run.sh must skip az login"
+  cleanup
+  pat="smoke-test-fake-pat"
+  options=$(jq -n --argjson base "${options}" --arg pat "${pat}" '$base + {azure_enabled: false, devops_pat: $pat}')
+  write_options "${key}"
+  docker run -d --name "${name}" --network host \
+    -v "${work}/data:/data" -v "${work}/config:/config" "${image}" >/dev/null
+  wait_for_log 'no az login needed' 30 || fail "run.sh did not skip az login in DevOps-only PAT mode"
+  wait_for_log '^\[devops\] Authentication: personal access token' 30 || fail "DevOps server did not use the PAT"
+  wait_for_log '^\[devops\] Ready' 120 || fail "no '[devops] Ready' in PAT mode within 120s"
+  echo "ok: az login skipped, [devops] Ready with a PAT"
+  path=/devops/mcp
+  code=$(http_code -H "Authorization: Bearer ${key}")
+  [ "${code}" = 200 ] || fail "PAT mode: ${path} with the key returned HTTP ${code}, expected 200"
+  path=/azure/mcp
+  code=$(http_code -H "Authorization: Bearer ${key}")
+  [ "${code}" = 404 ] || fail "PAT mode: ${path} returned HTTP ${code}, expected 404 (azure_enabled is off)"
+  echo "ok: /devops/mcp 200, /azure/mcp 404"
+  logs=$(docker logs "${name}" 2>&1 || true)
+  if grep -Fq -- "${pat}" <<<"${logs}" || grep -Fq -- "$(printf 'mcp-azure:%s' "${pat}" | base64)" <<<"${logs}"; then
+    fail "the PAT appears in the container log"
+  fi
+  if grep -Eq 'enter the code [A-Z0-9]+' <<<"${logs}"; then
+    fail "device-code login started although az login is not needed"
+  fi
+  echo "ok: PAT not in the log, no device-code login"
 fi
 
 echo "PASS: ${addon}"
