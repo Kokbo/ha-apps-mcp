@@ -42,6 +42,9 @@ if (!AZURE_ENABLED && !DEVOPS_ORG) {
 const BIN_DIR = '/app/node_modules/.bin';
 const UPSTREAM_RESTART_DELAY_MS = 15_000;
 const TOOL_CALL_TIMEOUT_MS = 5 * 60_000;
+// search_code downloads the full content of every result file (Git LFS
+// included) into memory, so a large `top` can take the DevOps server down.
+const SEARCH_CODE_MAX_TOP = 5;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -89,8 +92,14 @@ class Upstream {
       stderr: 'inherit',
     });
 
+    // The SDK discards the exit code and signal; keep them so the log says
+    // how the upstream stopped (SIGKILL usually means the kernel's OOM killer).
+    let exitStatus;
     try {
       await client.connect(transport);
+      transport._process?.once('exit', (code, signal) => {
+        exitStatus = signal ? `signal ${signal}` : `exit code ${code}`;
+      });
       this.tools = await this.fetchTools(client);
       this.client = client;
     } catch (error) {
@@ -109,7 +118,7 @@ class Upstream {
       this.tools = [];
       this.broadcastToolListChanged();
       if (this.stopped) return;
-      console.error(`[${this.id}] Upstream exited; restarting in ${UPSTREAM_RESTART_DELAY_MS / 1000}s`);
+      console.error(`[${this.id}] Upstream exited (${exitStatus ?? 'exit status unknown'}); restarting in ${UPSTREAM_RESTART_DELAY_MS / 1000}s`);
       setTimeout(() => this.run(), UPSTREAM_RESTART_DELAY_MS);
     };
 
@@ -126,12 +135,31 @@ class Upstream {
       cursor = page.nextCursor;
     } while (cursor);
 
-    if (!this.filterTool) return all;
-    const visible = all.filter(this.filterTool);
-    if (visible.length !== all.length) {
-      console.log(`[${this.id}] read_only: hiding ${all.length - visible.length} of ${all.length} tools not annotated readOnlyHint=true`);
+    let visible = all;
+    if (this.filterTool) {
+      visible = all.filter(this.filterTool);
+      if (visible.length !== all.length) {
+        console.log(`[${this.id}] read_only: hiding ${all.length - visible.length} of ${all.length} tools not annotated readOnlyHint=true`);
+      }
     }
-    return visible;
+    return visible.map(tool => this.withArgLimits(tool));
+  }
+
+  // Advertise argument caps in the schema so clients ask within them.
+  withArgLimits(tool) {
+    const limits = this.argLimits?.[tool.name];
+    const props = tool.inputSchema?.properties;
+    if (!limits || !props) return tool;
+    const properties = { ...props };
+    for (const [key, max] of Object.entries(limits)) {
+      if (!properties[key]) continue;
+      properties[key] = {
+        ...properties[key],
+        maximum: max,
+        description: `${properties[key].description ?? ''} (at most ${max} in this addon)`.trim(),
+      };
+    }
+    return { ...tool, inputSchema: { ...tool.inputSchema, properties } };
   }
 
   async refreshTools() {
@@ -175,6 +203,7 @@ if (AZURE_ENABLED) {
     command: `${BIN_DIR}/azmcp`,
     args: azureArgs,
     env: { ...process.env, AZURE_TOKEN_CREDENTIALS: 'AzureCliCredential' },
+    needsAzLogin: true,
     // Azure MCP enforces read-only itself via --read-only.
     filterTool: null,
     instructions: [
@@ -212,6 +241,8 @@ if (DEVOPS_ORG) {
     command: `${BIN_DIR}/mcp-server-azuredevops`,
     args: devopsArgs,
     env: devopsEnv,
+    needsAzLogin: !DEVOPS_PAT,
+    argLimits: { search_code: { top: SEARCH_CODE_MAX_TOP } },
     // @azure-devops/mcp has no read-only switch, but annotates every tool
     // (the server refuses to register a tool without annotations).
     filterTool: READ_ONLY ? tool => tool.annotations?.readOnlyHint === true : null,
@@ -243,17 +274,39 @@ function createProxyServer(up) {
   server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
     const client = up.client;
     if (!client) {
-      return errorResult(`${up.label} is not available right now (starting, restarting, or Azure login pending). Check the addon log.`);
+      return errorResult(`${up.label} is not available right now (starting or restarting${up.needsAzLogin ? ', or Azure login pending' : ''}). Check the addon log.`);
     }
     const name = req.params.name;
     if (!up.tools.some(t => t.name === name)) {
       return errorResult(`Tool '${name}' is not available${READ_ONLY && up.filterTool ? ' (the addon is running in read-only mode)' : ''}.`);
     }
-    return client.callTool(
-      { name, arguments: req.params.arguments },
+
+    // Cap arguments that make a single call too heavy (see SEARCH_CODE_MAX_TOP).
+    let args = req.params.arguments;
+    const capped = [];
+    for (const [key, max] of Object.entries(up.argLimits?.[name] ?? {})) {
+      const value = Number(args?.[key]);
+      if (Number.isFinite(value) && value > max) {
+        args = { ...args, [key]: max };
+        capped.push(`${key} ${value} -> ${max}`);
+      }
+    }
+    if (capped.length > 0) {
+      console.log(`[${up.id}] ${name}: capped ${capped.join(', ')}`);
+    }
+
+    const result = await client.callTool(
+      { name, arguments: args },
       undefined,
       { timeout: TOOL_CALL_TIMEOUT_MS, signal: extra?.signal },
     );
+    if (capped.length > 0 && Array.isArray(result?.content)) {
+      result.content = [
+        ...result.content,
+        { type: 'text', text: `Note: the addon capped ${capped.join(', ')} for ${name} to limit memory use. Use skip to page through more results.` },
+      ];
+    }
+    return result;
   });
 
   return server;

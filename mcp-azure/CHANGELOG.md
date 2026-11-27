@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1
+
+- Cap `top` at 5 for the Azure DevOps `search_code` tool, and show the limit in its schema. `search_code` downloads the full content of every result file (Git LFS included), and a call with `top: 20` made the DevOps server exit. If a call was capped, the result says so.
+- The log now says how an upstream server stopped: `Upstream exited (exit code N)` or `(signal SIGKILL)`.
+- "Not available right now" no longer mentions an Azure login when nothing needs one (Azure DevOps with a PAT).
+
 ## 1.1.0
 
 - New option `devops_pat`: the Azure DevOps MCP Server can use a personal access token instead of `az login` (`--authentication pat`). Useful when Conditional Access blocks the device-code login but your organisation allows PATs.
