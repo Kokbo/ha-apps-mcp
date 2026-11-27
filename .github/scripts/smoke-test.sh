@@ -202,7 +202,9 @@ if [ "${addon}" = mcp-azure ]; then
   echo "--- DevOps-only with a PAT: run.sh must skip az login"
   cleanup
   pat="smoke-test-fake-pat"
-  options=$(jq -n --argjson base "${options}" --arg pat "${pat}" '$base + {azure_enabled: false, devops_pat: $pat}')
+  # A tiny max_result_chars (below HA's schema minimum, which this script
+  # bypasses) makes even the fake organisation's error result get truncated.
+  options=$(jq -n --argjson base "${options}" --arg pat "${pat}" '$base + {azure_enabled: false, devops_pat: $pat, max_result_chars: 5}')
   write_options "${key}"
   docker run -d --name "${name}" --network host \
     -v "${work}/data:/data" -v "${work}/config:/config" "${image}" >/dev/null
@@ -236,6 +238,12 @@ if [ "${addon}" = mcp-azure ]; then
   grep -Fq 'the addon capped top 20 -> 5' <<<"${result}" || fail "search_code result has no cap note: ${result:0:300}"
   wait_for_log '^\[devops\] search_code: capped top 20 -> 5' 10 || fail "no cap line in the log"
   echo "ok: search_code top 20 capped to 5"
+
+  echo "--- Tool results are cut off at max_result_chars"
+  grep -Fq 'the addon truncated this result to the first 5 of' <<<"${result}" || fail "search_code result has no truncation note: ${result:0:300}"
+  wait_for_log '^\[devops\] search_code: result truncated [0-9,]+ -> 5 chars' 10 || fail "no truncation line in the log"
+  wait_for_log '^Max tool result size: 5 characters' 5 || fail "startup log does not show max_result_chars"
+  echo "ok: result truncated to max_result_chars, with a note"
 
   echo "--- A killed upstream is logged with its signal and restarted"
   # The [s] keeps this shell's own command line from matching.

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.2
+
+- Limit the size of every tool result passed to the client: text beyond `max_result_chars` (new optional option, default 100,000 characters) is cut off, and the result ends with a note telling the model to narrow its query. A `search_code` call returned about 15 MB (4.2 million tokens) of file content, more than any model's context window. The log shows `<tool>: result truncated …`, and the active limit at startup.
+
 ## 1.1.1
 
 - Cap `top` at 5 for the Azure DevOps `search_code` tool, and show the limit in its schema. `search_code` downloads the full content of every result file (Git LFS included), and a call with `top: 20` made the DevOps server exit. If a call was capped, the result says so.

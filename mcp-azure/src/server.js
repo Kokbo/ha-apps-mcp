@@ -28,6 +28,13 @@ const DEVOPS_PAT = String(config.devops_pat ?? '').trim();
 const DEVOPS_PROJECTS = Array.isArray(config.devops_projects)
   ? config.devops_projects.map(p => String(p).trim()).filter(Boolean)
   : [];
+// Largest tool result (in characters) passed on to the client. A single
+// search_code call returned ~15 MB of file content, far more than any
+// model's context window.
+const DEFAULT_MAX_RESULT_CHARS = 100_000;
+const MAX_RESULT_CHARS = Number.isInteger(config.max_result_chars) && config.max_result_chars > 0
+  ? config.max_result_chars
+  : DEFAULT_MAX_RESULT_CHARS;
 
 if (!API_KEY) {
   console.error('api_key is not set; refusing to start an unauthenticated endpoint.');
@@ -47,6 +54,36 @@ const TOOL_CALL_TIMEOUT_MS = 5 * 60_000;
 const SEARCH_CODE_MAX_TOP = 5;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Keep the text of a tool result within MAX_RESULT_CHARS. Text items and
+// embedded text resources share one budget; once it's used up, later text
+// is dropped. Returns the original and kept sizes, or null if nothing was cut.
+function truncateResult(result) {
+  if (!Array.isArray(result?.content)) return null;
+  const textOf = item => (item?.type === 'text' ? item.text : item?.type === 'resource' ? item.resource?.text : undefined);
+  const total = result.content.reduce((sum, item) => sum + (typeof textOf(item) === 'string' ? textOf(item).length : 0), 0);
+  if (total <= MAX_RESULT_CHARS) return null;
+
+  let budget = MAX_RESULT_CHARS;
+  const content = [];
+  for (const item of result.content) {
+    const text = textOf(item);
+    if (typeof text !== 'string') {
+      content.push(item);
+      continue;
+    }
+    if (budget <= 0) continue;
+    const kept = text.slice(0, budget);
+    budget -= kept.length;
+    content.push(item.type === 'text' ? { ...item, text: kept } : { ...item, resource: { ...item.resource, text: kept } });
+  }
+  result.content = content;
+  // structuredContent repeats the full payload; drop it rather than pass it on uncut.
+  delete result.structuredContent;
+  return { total, kept: MAX_RESULT_CHARS };
+}
+
+const formatCount = n => n.toLocaleString('en-US');
 
 function errorResult(text) {
   return { isError: true, content: [{ type: 'text', text }] };
@@ -300,11 +337,18 @@ function createProxyServer(up) {
       undefined,
       { timeout: TOOL_CALL_TIMEOUT_MS, signal: extra?.signal },
     );
-    if (capped.length > 0 && Array.isArray(result?.content)) {
-      result.content = [
-        ...result.content,
-        { type: 'text', text: `Note: the addon capped ${capped.join(', ')} for ${name} to limit memory use. Use skip to page through more results.` },
-      ];
+
+    const notes = [];
+    const truncated = truncateResult(result);
+    if (truncated) {
+      console.log(`[${up.id}] ${name}: result truncated ${formatCount(truncated.total)} -> ${formatCount(truncated.kept)} chars`);
+      notes.push(`Note: the addon truncated this result to the first ${formatCount(truncated.kept)} of ${formatCount(truncated.total)} characters. Narrow the query (project, repository, path, date range) or request fewer results.`);
+    }
+    if (capped.length > 0) {
+      notes.push(`Note: the addon capped ${capped.join(', ')} for ${name} to limit memory use. Use skip to page through more results.`);
+    }
+    if (notes.length > 0 && Array.isArray(result?.content)) {
+      result.content = [...result.content, ...notes.map(text => ({ type: 'text', text }))];
     }
     return result;
   });
@@ -432,6 +476,7 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`Endpoint: /${up.id}/mcp (${up.label})`);
   }
   console.log(`Read-only mode: ${READ_ONLY ? 'on' : 'OFF'}`);
+  console.log(`Max tool result size: ${formatCount(MAX_RESULT_CHARS)} characters`);
 });
 
 for (const up of upstreams) {

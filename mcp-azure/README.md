@@ -29,6 +29,7 @@ On startup `run.sh` checks `az account get-access-token`, unless nothing needs `
 | `devops_projects` | `[]` | Hint for the model about which projects to use by default |
 | `tenant` | *(unset)* | Optional Entra tenant ID for `az login` / DevOps auth via `az login` |
 | `read_only` | `true` | Azure: `--read-only`. DevOps: only tools annotated `readOnlyHint: true` are exposed |
+| `max_result_chars` | *(unset = 100000)* | Largest tool result passed to the client, in characters (minimum 1000). Longer results are cut off with a note to the model |
 
 ## Open WebUI connection
 
