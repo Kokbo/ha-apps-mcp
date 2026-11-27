@@ -15,6 +15,18 @@ if [ -z "$API_KEY" ]; then
   exit 1
 fi
 
+# `false // true` is true in jq, so compare explicitly.
+AZURE_ENABLED=$(jq -r 'if .azure_enabled == false then "false" else "true" end' "$OPTIONS")
+DEVOPS_ORG=$(jq -r '(.devops_organization // "") | gsub("^\\s+|\\s+$"; "")' "$OPTIONS")
+HAS_DEVOPS_PAT=$(jq -r 'if ((.devops_pat // "") | gsub("^\\s+|\\s+$"; "")) != "" then "true" else "false" end' "$OPTIONS")
+
+# The Azure MCP Server always needs az login; the DevOps server only when it
+# has no personal access token.
+if [ "$AZURE_ENABLED" = false ] && { [ -z "$DEVOPS_ORG" ] || [ "$HAS_DEVOPS_PAT" = true ]; }; then
+  log "Azure MCP Server disabled and Azure DevOps uses a personal access token: no az login needed."
+  exec node /app/src/server.js
+fi
+
 mkdir -p "$AZURE_CONFIG_DIR"
 chmod 700 "$AZURE_CONFIG_DIR"
 

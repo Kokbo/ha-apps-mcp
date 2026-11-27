@@ -15,6 +15,7 @@ On the addon's **Configuration** tab:
 2. Set `devops_organization` to your Azure DevOps organization (the `<org>` in `https://dev.azure.com/<org>`). Leave it empty to disable the Azure DevOps server.
 3. Optional: set `tenant` to your Entra tenant ID if your account has access to more than one tenant.
 4. Leave `read_only` on `true` unless you really need write access (see Security below).
+5. Optional: if your organisation blocks the device-code login (see [Azure DevOps with a personal access token](#azure-devops-with-a-personal-access-token)), set `devops_pat` and turn `azure_enabled` off.
 
 ## 2. First start: sign in with a device code
 
@@ -31,6 +32,24 @@ The Home Assistant host has no browser, so the addon uses the device-code flow:
 If you don't complete the login within about 15 minutes, the code expires. The addon logs this and shows a new code after 30 seconds. It keeps retrying and won't crash-loop.
 
 The token cache is stored in `/data/.azure` (addon-private storage). It survives addon restarts and updates, and it is included in Home Assistant backups of this addon. Treat those backups as sensitive.
+
+### Azure DevOps with a personal access token
+
+If the device-code login fails with **error 53003** ("You cannot access this right now"), Conditional Access blocks it: for example, your organisation blocks the device-code flow or only issues tokens to managed devices. Don't try to work around that policy. If your organisation **allows personal access tokens** (PATs) for Azure DevOps, you can use one for the DevOps server instead:
+
+1. On a device you're allowed to sign in from, open `https://dev.azure.com/<organization>/_usersSettings/tokens` and create a token:
+   - **Organization:** only this organization (not "All accessible organizations").
+   - **Expiration:** as short as is practical. The addon stops working for DevOps when the token expires.
+   - **Scopes:** the least you need. For read-only use, for example: *Work Items (Read)*, *Code (Read)*, *Build (Read)*, *Project and Team (Read)*, *Wiki (Read)*.
+2. On the addon's **Configuration** tab, set `devops_pat` to the token and `devops_organization` to your organization.
+3. Turn `azure_enabled` **off**. The Azure MCP Server has no PAT equivalent; it always needs `az login`.
+4. Start the addon. The log shows `[devops] Authentication: personal access token` and `[devops] Ready, N tools`, and no device code. Only `/devops/mcp` is served.
+
+Notes:
+- If `azure_enabled` stays on, the addon still asks for the device-code login (for the Azure server) and only DevOps uses the PAT.
+- Your organisation's PAT policies still apply: an admin can restrict PAT creation, scopes and lifetime. With *IP Conditional Access policy validation* turned on in Azure DevOps, calls from a blocked IP address are refused even with a valid PAT.
+- The PAT's scopes are the real limit on what the model can do. `read_only` still hides tools that aren't annotated as read-only, but scope the token as if it weren't there.
+- To rotate or revoke the token, change or clear `devops_pat` and restart the addon, and revoke the old token in Azure DevOps.
 
 ## 3. Add the tool servers in Open WebUI
 
@@ -64,7 +83,8 @@ To sign out completely or switch accounts, stop the addon, uninstall and reinsta
 ## 5. Security
 
 - **Read-only by default.** With `read_only: true`, the Azure MCP Server runs with `--read-only`, and the Azure DevOps server only exposes tools that Microsoft annotates as read-only (`readOnlyHint: true`). Some "read-only" tools can still return sensitive data, such as repository contents and pipeline logs.
-- **It acts as you.** Every call runs with **all** permissions of the signed-in account in Azure and Azure DevOps. If you set `read_only: false`, the model can create, change and delete resources, work items, branches, pipelines, and so on, wherever *you* can.
+- **The PAT is a secret.** `devops_pat` is stored in the addon's options and included in Home Assistant backups of this addon, just like the `/data/.azure` token cache. The addon passes it only to the Azure DevOps MCP Server, which sends it only over HTTPS to `dev.azure.com`.
+- **It acts as you.** Every call runs with **all** permissions of the signed-in account in Azure and Azure DevOps (with a PAT: the token's scopes). If you set `read_only: false`, the model can create, change and delete resources, work items, branches, pipelines, and so on, wherever *you* can.
 - **Never expose port 3005 to the internet.** With `host_network` the port is reachable from your LAN, and the `api_key` is the only thing protecting it. Don't forward it on your router or publish it through a reverse proxy or tunnel. Use a long random `api_key`, and change it if it ever leaks.
 - Anyone who can open the addon's Log tab during a login can see the device code. The code is only useful for a few minutes, and only to someone who can also sign in as you.
 

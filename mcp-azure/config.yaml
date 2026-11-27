@@ -1,5 +1,5 @@
 name: MCP Azure Server
-version: "1.0.1"
+version: "1.1.0"
 slug: mcp-azure
 description: Microsoft's Azure + Azure DevOps MCP servers via Streamable HTTP, signed in with your own az login
 url: https://github.com/Kokbo/ha-apps-mcp
@@ -14,13 +14,16 @@ ports_description:
 options:
   port: 3005
   api_key: ""
+  azure_enabled: true
   devops_organization: ""
   devops_projects: []
   read_only: true
 schema:
   port: int
   api_key: password
+  azure_enabled: bool?
   devops_organization: str
+  devops_pat: password?
   devops_projects:
     - str
   tenant: str?

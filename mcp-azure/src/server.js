@@ -22,13 +22,20 @@ const PORT = config.port ?? 3005;
 const API_KEY = String(config.api_key ?? '');
 const READ_ONLY = config.read_only !== false;
 const TENANT = String(config.tenant ?? '').trim();
+const AZURE_ENABLED = config.azure_enabled !== false;
 const DEVOPS_ORG = String(config.devops_organization ?? '').trim();
+const DEVOPS_PAT = String(config.devops_pat ?? '').trim();
 const DEVOPS_PROJECTS = Array.isArray(config.devops_projects)
   ? config.devops_projects.map(p => String(p).trim()).filter(Boolean)
   : [];
 
 if (!API_KEY) {
   console.error('api_key is not set; refusing to start an unauthenticated endpoint.');
+  process.exit(1);
+}
+
+if (!AZURE_ENABLED && !DEVOPS_ORG) {
+  console.error('azure_enabled is off and devops_organization is empty: there is nothing to serve.');
   process.exit(1);
 }
 
@@ -157,29 +164,46 @@ const readOnlyNote = READ_ONLY
 
 const upstreams = [];
 
-const azureArgs = ['server', 'start'];
-if (READ_ONLY) azureArgs.push('--read-only');
+if (AZURE_ENABLED) {
+  const azureArgs = ['server', 'start'];
+  if (READ_ONLY) azureArgs.push('--read-only');
 
-upstreams.push(new Upstream({
-  id: 'azure',
-  label: 'Azure MCP Server',
-  serverName: 'mcp-azure',
-  command: `${BIN_DIR}/azmcp`,
-  args: azureArgs,
-  env: { ...process.env, AZURE_TOKEN_CREDENTIALS: 'AzureCliCredential' },
-  // Azure MCP enforces read-only itself via --read-only.
-  filterTool: null,
-  instructions: [
-    "Provides Azure tools (Microsoft's Azure MCP Server) acting as the user signed in with az login on the Home Assistant host.",
-    'Use them to inspect subscriptions, resource groups, resources, monitoring data, storage, Key Vault metadata and other Azure services.',
-    readOnlyNote,
-    'Prefer these tools over any general-purpose shell or code-execution tool for Azure questions.',
-  ].join(' '),
-}));
+  upstreams.push(new Upstream({
+    id: 'azure',
+    label: 'Azure MCP Server',
+    serverName: 'mcp-azure',
+    command: `${BIN_DIR}/azmcp`,
+    args: azureArgs,
+    env: { ...process.env, AZURE_TOKEN_CREDENTIALS: 'AzureCliCredential' },
+    // Azure MCP enforces read-only itself via --read-only.
+    filterTool: null,
+    instructions: [
+      "Provides Azure tools (Microsoft's Azure MCP Server) acting as the user signed in with az login on the Home Assistant host.",
+      'Use them to inspect subscriptions, resource groups, resources, monitoring data, storage, Key Vault metadata and other Azure services.',
+      readOnlyNote,
+      'Prefer these tools over any general-purpose shell or code-execution tool for Azure questions.',
+    ].join(' '),
+  }));
+} else {
+  console.log('[azure] azure_enabled is off; Azure MCP server disabled.');
+}
 
 if (DEVOPS_ORG) {
-  const devopsArgs = [DEVOPS_ORG, '--authentication', 'azcli'];
-  if (TENANT) devopsArgs.push('--tenant', TENANT);
+  // With a PAT the DevOps server needs no az login: @azure-devops/mcp reads
+  // base64("<user>:<pat>") from PERSONAL_ACCESS_TOKEN (the user part is
+  // ignored) and only sends it over https to dev.azure.com hosts.
+  const devopsArgs = DEVOPS_PAT
+    ? [DEVOPS_ORG, '--authentication', 'pat']
+    : [DEVOPS_ORG, '--authentication', 'azcli'];
+  if (TENANT && !DEVOPS_PAT) devopsArgs.push('--tenant', TENANT);
+  const devopsEnv = { ...process.env };
+  if (DEVOPS_PAT) {
+    devopsEnv.PERSONAL_ACCESS_TOKEN = Buffer.from(`mcp-azure:${DEVOPS_PAT}`).toString('base64');
+  }
+  const actingAs = DEVOPS_PAT
+    ? 'acting as the owner of the configured personal access token (limited to its scopes)'
+    : 'acting as the user signed in with az login';
+  console.log(`[devops] Authentication: ${DEVOPS_PAT ? 'personal access token' : 'az login'}`);
 
   upstreams.push(new Upstream({
     id: 'devops',
@@ -187,12 +211,12 @@ if (DEVOPS_ORG) {
     serverName: 'mcp-azure-devops',
     command: `${BIN_DIR}/mcp-server-azuredevops`,
     args: devopsArgs,
-    env: { ...process.env },
+    env: devopsEnv,
     // @azure-devops/mcp has no read-only switch, but annotates every tool
     // (the server refuses to register a tool without annotations).
     filterTool: READ_ONLY ? tool => tool.annotations?.readOnlyHint === true : null,
     instructions: [
-      `Provides Azure DevOps tools for organization '${DEVOPS_ORG}' (https://dev.azure.com/${DEVOPS_ORG}), acting as the user signed in with az login.`,
+      `Provides Azure DevOps tools for organization '${DEVOPS_ORG}' (https://dev.azure.com/${DEVOPS_ORG}), ${actingAs}.`,
       DEVOPS_PROJECTS.length > 0
         ? `The user mainly works in the projects ${DEVOPS_PROJECTS.map(p => `'${p}'`).join(', ')}; use these when a tool needs a project and the user did not name one.`
         : '',
