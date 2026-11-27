@@ -139,6 +139,31 @@ else
   echo "note: ${config_yaml} has no api_key option; auth checks skipped"
 fi
 
+# mcp_post <session id> <json>: POST one JSON-RPC message to ${path}.
+mcp_post() {
+  curl -s --max-time 60 \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -H "Authorization: Bearer ${key}" \
+    -H "Mcp-Session-Id: $1" \
+    -d "$2" "http://127.0.0.1:${port}${path}" || true
+}
+
+# mcp_session: initialize an MCP session on ${path} and print its id.
+mcp_session() {
+  local headers sid
+  headers=$(curl -s -D - -o /dev/null --max-time 10 \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -H "Authorization: Bearer ${key}" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"smoke-test","version":"1"}}}' \
+    "http://127.0.0.1:${port}${path}" || true)
+  sid=$(sed -n 's/^[Mm]cp-[Ss]ession-[Ii]d: *\([^[:space:]]*\).*/\1/p' <<<"${headers}")
+  [ -n "${sid}" ] || return 1
+  mcp_post "${sid}" '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null
+  echo "${sid}"
+}
+
 # wait_for_log <extended regex> <seconds>: succeed once the container log
 # matches. The log goes into a variable first: piping `docker logs` into
 # `grep -q` can fail under pipefail when grep exits early.
@@ -200,6 +225,30 @@ if [ "${addon}" = mcp-azure ]; then
     fail "device-code login started although az login is not needed"
   fi
   echo "ok: PAT not in the log, no device-code login"
+
+  echo "--- search_code: top is capped and advertised as at most 5"
+  path=/devops/mcp
+  sid=$(mcp_session) || fail "could not open an MCP session on ${path}"
+  tools=$(mcp_post "${sid}" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | sed -n 's/^data: //p')
+  jq -e '.result.tools[] | select(.name == "search_code") | .inputSchema.properties.top.maximum == 5' <<<"${tools}" >/dev/null \
+    || fail "tools/list does not advertise maximum 5 for search_code.top"
+  result=$(mcp_post "${sid}" '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_code","arguments":{"searchText":"smoke","top":20}}}')
+  grep -Fq 'the addon capped top 20 -> 5' <<<"${result}" || fail "search_code result has no cap note: ${result:0:300}"
+  wait_for_log '^\[devops\] search_code: capped top 20 -> 5' 10 || fail "no cap line in the log"
+  echo "ok: search_code top 20 capped to 5"
+
+  echo "--- A killed upstream is logged with its signal and restarted"
+  # The [s] keeps this shell's own command line from matching.
+  docker exec "${name}" sh -c 'for p in /proc/[0-9]*; do grep -q "mcp-server-azuredevop[s]" "$p/cmdline" 2>/dev/null && kill -KILL "${p#/proc/}"; done; true'
+  wait_for_log '^\[devops\] Upstream exited \(signal SIGKILL\)' 30 || fail "no 'Upstream exited (signal SIGKILL)' in the log"
+  restarted=false
+  for _ in $(seq 1 90); do
+    logs=$(docker logs "${name}" 2>&1 || true)
+    if [ "$(grep -c '^\[devops\] Ready' <<<"${logs}")" -ge 2 ]; then restarted=true; break; fi
+    sleep 1
+  done
+  [ "${restarted}" = true ] || fail "DevOps server did not come back after SIGKILL"
+  echo "ok: SIGKILL logged, DevOps server restarted"
 fi
 
 echo "PASS: ${addon}"
